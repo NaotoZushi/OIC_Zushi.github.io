@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>PC情報チェック（ブラウザ）</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 24px; }
+  h1 { margin: 0 0 8px; }
+  .row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  .card { border: 1px solid #ccc; border-radius: 12px; padding: 16px; }
+  pre { white-space: pre-wrap; word-break: break-all; background: #f6f6f6; padding: 12px; border-radius: 8px; }
+  button { padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+<h1>PC情報チェック（ブラウザで取得）</h1>
+<p>※ブラウザの安全設計の範囲で取得しています。値は概数やマスクされる場合があります。</p>
+
+<div class="row">
+  <div class="card">
+    <h2>基本情報</h2>
+    <div id="basic"></div>
+  </div>
+  <div class="card">
+    <h2>画面・環境</h2>
+    <div id="display"></div>
+  </div>
+  <div class="card">
+    <h2>WebGL / GPU（参考）</h2>
+    <div id="gl"></div>
+    <canvas id="glc" width="1" height="1" style="display:none;"></canvas>
+  </div>
+  <div class="card">
+    <h2>ストレージ見積り</h2>
+    <div id="storage"></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <h2>メディアデバイス名（カメラ/マイク）<small>（任意・許可が必要）</small></h2>
+  <p><button id="btnDevices">デバイス名を取得</button></p>
+  <div id="devices"></div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <h2>JSON</h2>
+  <p>
+    <button id="btnCopy">JSONをコピー</button>
+    <button id="btnDownload">ダウンロード</button>
+    <!-- 任意：サーバーに収集するならエンドポイントを設定 -->
+    <!-- <button id="btnSend">サーバーへ送信</button> -->
+  </p>
+  <pre id="json"></pre>
+</div>
+
+<script>
+(async function () {
+  function safe(getter, fallback=null) {
+    try { const v = getter(); return (v ?? fallback); } catch { return fallback; }
+  }
+
+  const ua = navigator.userAgent;
+  const uaData = safe(() => navigator.userAgentData); // UA-CH
+  const languages = navigator.languages || [navigator.language].filter(Boolean);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const hc = safe(() => navigator.hardwareConcurrency);
+  const dm = safe(() => navigator.deviceMemory); // GB の概数（Chrome系）
+  const online = navigator.onLine;
+  const conn = safe(() => navigator.connection);
+  const nowIso = new Date().toISOString();
+
+  // 画面・表示
+  const display = {
+    width: screen.width, height: screen.height,
+    availWidth: screen.availWidth, availHeight: screen.availHeight,
+    colorDepth: screen.colorDepth, pixelDepth: screen.pixelDepth,
+    devicePixelRatio: window.devicePixelRatio
+  };
+
+  // WebGL/GPU
+  let glInfo = { vendor: null, renderer: null };
+  try {
+    const canvas = document.getElementById('glc');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (gl) {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) {
+        glInfo.vendor   = gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL);
+        glInfo.renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+      } else {
+        glInfo.renderer = gl.getParameter(gl.RENDERER);
+        glInfo.vendor   = gl.getParameter(gl.VENDOR);
+      }
+    }
+  } catch {}
+
+  // ストレージ見積り
+  let storage = {};
+  try {
+    const est = await navigator.storage.estimate();
+    storage = {
+      quotaBytes: est.quota ?? null,
+      usageBytes: est.usage ?? null
+    };
+  } catch {}
+
+  const data = {
+    timestamp: nowIso,
+    locationHref: location.href,
+    ua,
+    uaData: uaData ? {
+      brands: uaData.brands, platform: uaData.platform, mobile: uaData.mobile,
+      architecture: uaData.architecture, model: uaData.model, platformVersion: uaData.platformVersion
+    } : null,
+    platform: navigator.platform || null,
+    languages, online, tz,
+    connection: conn ? {
+      effectiveType: conn.effectiveType, downlink: conn.downlink, rtt: conn.rtt, saveData: conn.saveData
+    } : null,
+    cpuLogicalProcessors: hc ?? null,
+    deviceMemoryGB: dm ?? null,
+    display,
+    webgl: glInfo,
+    storage
+  };
+
+  // 画面へ表示（簡易）
+  const $ = (id) => document.getElementById(id);
+  $('basic').innerHTML = `
+    <div><b>UA</b>: ${data.ua}</div>
+    <div><b>UA-CH</b>: ${data.uaData ? JSON.stringify(data.uaData) : 'N/A'}</div>
+    <div><b>Platform</b>: ${data.platform}</div>
+    <div><b>言語</b>: ${data.languages.join(', ')}</div>
+    <div><b>タイムゾーン</b>: ${data.tz}</div>
+    <div><b>論理CPU</b>: ${data.cpuLogicalProcessors ?? '不明'}</div>
+    <div><b>メモリ(概数GB)</b>: ${data.deviceMemoryGB ?? '不明'}</div>
+    <div><b>オンライン</b>: ${data.online}</div>
+    <div><b>回線</b>: ${data.connection ? JSON.stringify(data.connection) : 'N/A'}</div>
+  `;
+  $('display').innerHTML = `
+    <div><b>解像度</b>: ${display.width}×${display.height} (DPR:${display.devicePixelRatio})</div>
+    <div><b>利用可能域</b>: ${display.availWidth}×${display.availHeight}</div>
+    <div><b>色深度</b>: ${display.colorDepth}, <b>pixelDepth</b>: ${display.pixelDepth}</div>
+  `;
+  $('gl').innerHTML = `
+    <div><b>Vendor</b>: ${glInfo.vendor ?? 'N/A'}</div>
+    <div><b>Renderer</b>: ${glInfo.renderer ?? 'N/A'}</div>
+    <small>※ブラウザ設定やGPUドライバにより匿名化・マスクされる場合があります。</small>
+  `;
+  $('storage').innerHTML = `
+    <div><b>割当(概算)</b>: ${storage.quotaBytes ? (storage.quotaBytes/1024/1024/1024).toFixed(2)+' GB' : 'N/A'}</div>
+    <div><b>使用(概算)</b>: ${storage.usageBytes ? (storage.usageBytes/1024/1024).toFixed(1)+' MB' : 'N/A'}</div>
+  `;
+
+  const showJSON = () => $('json').textContent = JSON.stringify(data, null, 2);
+  showJSON();
+
+  // クリップボード
+  $('btnCopy').onclick = async () => {
+    await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+    alert('JSONをコピーしました');
+  };
+  // ダウンロード
+  $('btnDownload').onclick = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'system-info.json'; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  // サーバーへPOST（使う場合はURL差し替え）
+  // $('btnSend').onclick = async () => {
+  //   const resp = await fetch('https://your-endpoint.example.com/collect', {
+  //     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data)
+  //   });
+  //   alert('送信ステータス: ' + resp.status);
+  // };
+
+  // デバイス名取得（ユーザー同意が必要）
+  $('btnDevices').onclick = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      const list = await navigator.mediaDevices.enumerateDevices();
+      const names = list.map(d => ({ kind: d.kind, label: d.label || '(不明/未許可)', deviceId: d.deviceId ? '***' : '' }));
+      data.mediaDevices = names;
+      $('devices').innerHTML = '<pre>' + JSON.stringify(names, null, 2) + '</pre>';
+      showJSON();
+    } catch (e) {
+      $('devices').textContent = '取得できませんでした: ' + e;
+    }
+  };
+})();
+</script>
+</body>
+</html>
